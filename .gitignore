@@ -1,0 +1,12 @@
+target/
+*.db
+*.db-*
+*.lock
+.DS_Store
+.idea/
+*.iml
+distribution/
+*.class
+*.jar
+.env
+.env.*

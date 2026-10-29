@@ -1,0 +1,10 @@
+CREATE TABLE schema_version(version INTEGER PRIMARY KEY, checksum TEXT NOT NULL, applied_at TEXT NOT NULL);
+CREATE TABLE subjects(id INTEGER PRIMARY KEY, code TEXT NOT NULL UNIQUE, name TEXT NOT NULL CHECK(length(trim(name))>0));
+CREATE TABLE topics(id INTEGER PRIMARY KEY, subject_id INTEGER NOT NULL REFERENCES subjects(id) ON DELETE RESTRICT, code TEXT NOT NULL, name TEXT NOT NULL CHECK(length(trim(name))>0), UNIQUE(subject_id,code));
+CREATE TABLE questions(id INTEGER PRIMARY KEY, topic_id INTEGER NOT NULL REFERENCES topics(id) ON DELETE RESTRICT, current_revision INTEGER NOT NULL CHECK(current_revision>=1), archived INTEGER NOT NULL CHECK(archived IN(0,1)));
+CREATE TABLE question_revisions(question_id INTEGER NOT NULL REFERENCES questions(id) ON DELETE RESTRICT, revision_no INTEGER NOT NULL, topic_id INTEGER NOT NULL REFERENCES topics(id), text TEXT NOT NULL CHECK(length(trim(text)) BETWEEN 1 AND 10000), normalized_text TEXT NOT NULL, type TEXT NOT NULL CHECK(type IN('THEORY','PRACTICE')), difficulty INTEGER NOT NULL CHECK(difficulty BETWEEN 1 AND 5), importance INTEGER NOT NULL CHECK(importance BETWEEN 1 AND 5), max_points_scaled INTEGER NOT NULL CHECK(max_points_scaled BETWEEN 1 AND 99999999), guidance TEXT NOT NULL, archived INTEGER NOT NULL CHECK(archived IN(0,1)), saved_at TEXT NOT NULL, PRIMARY KEY(question_id,revision_no));
+CREATE TABLE audit_log(id INTEGER PRIMARY KEY, occurred_at TEXT NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL, object_type TEXT NOT NULL, object_id INTEGER NOT NULL, details TEXT NOT NULL);
+CREATE INDEX idx_topics_subject ON topics(subject_id);
+CREATE INDEX idx_questions_topic ON questions(topic_id,archived);
+CREATE INDEX idx_revision_normalized ON question_revisions(normalized_text);
+CREATE INDEX idx_audit_date ON audit_log(occurred_at);
