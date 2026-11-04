@@ -60,9 +60,16 @@ public final class CatalogController {
         } catch (ExecutionException e) {
           status.accept("Операция не выполнена");
           failure.accept(e.getCause());
+        } catch (RuntimeException e) {
+          status.accept("Операция не выполнена");
+          failure.accept(e);
         }
       }
     }.execute();
+  }
+
+  public <T> void execute(String label, Callable<T> task, Consumer<T> success) {
+    run(label, task, success, error);
   }
 
   public void reload(Consumer<Snapshot> success) {
@@ -109,8 +116,12 @@ public final class CatalogController {
         error);
   }
 
-  public void preview(Path path, Consumer<ImportPreview> success) {
-    run("Проверка CSV...", () -> new CsvQuestionImporter(service).preview(path), success, error);
+  public void preview(Path path, boolean skipDuplicates, Consumer<ImportPreview> success) {
+    run(
+        "Проверка CSV...",
+        () -> new CsvQuestionImporter(service).preview(path, skipDuplicates),
+        success,
+        error);
   }
 
   public void importRows(List<Question> rows, Consumer<List<Question>> success) {
@@ -120,5 +131,4 @@ public final class CatalogController {
   public void history(long id, Consumer<List<Revision>> success) {
     run("Загрузка версий...", () -> service.history(id), success, error);
   }
-
 }

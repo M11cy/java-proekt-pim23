@@ -2,35 +2,43 @@ package ru.exam.infrastructure;
 
 import java.math.BigDecimal;
 import java.sql.*;
+import java.time.*;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import ru.exam.domain.*;
 import ru.exam.repository.CatalogRepository;
+import ru.exam.service.AccessControl;
 
 public final class JdbcCatalogRepository implements CatalogRepository {
   private final Database database;
+  private final AccessControl access;
   private static final String CURRENT =
       "SELECT"
           + " q.id,r.topic_id,r.text,r.type,r.difficulty,r.importance,r.max_points_scaled,r.guidance,q.archived,q.current_revision"
           + " FROM questions q JOIN question_revisions r ON r.question_id=q.id AND"
           + " r.revision_no=q.current_revision ";
 
-  public JdbcCatalogRepository(Database database) {
+  public JdbcCatalogRepository(Database database, AccessControl access) {
     this.database = database;
+    this.access = access;
   }
 
   @Override
   public List<Subject> subjects() {
     return database.read(
         c -> {
-          var list = new ArrayList<Subject>();
-          try (var s = c.createStatement();
-              var r = s.executeQuery("SELECT * FROM subjects ORDER BY code,id")) {
-            while (r.next())
-              list.add(new Subject(r.getLong("id"), r.getString("code"), r.getString("name")));
-          }
-          return List.copyOf(list);
+          var user = access.require(c);
+          return JdbcSupport.list(
+              c,
+              "SELECT id,code,name FROM subjects WHERE ?='ADMIN' OR EXISTS(SELECT 1 FROM"
+                  + " teaching_assignments a JOIN study_groups g ON g.id=a.group_id JOIN"
+                  + " study_periods p ON p.id=a.period_id WHERE a.teacher_id=? AND"
+                  + " a.subject_id=subjects.id AND a.active=1 AND g.active=1 AND p.active=1) ORDER"
+                  + " BY code,id",
+              r -> new Subject(r.getLong(1), r.getString(2), r.getString(3)),
+              user.role().name(),
+              user.id());
         });
   }
 
@@ -38,6 +46,18 @@ public final class JdbcCatalogRepository implements CatalogRepository {
   public Subject saveSubject(Subject value) {
     return database.transaction(
         c -> {
+          access.admin(c);
+          String before =
+              value.id() == 0
+                  ? "Новая дисциплина"
+                  : JdbcSupport.list(
+                          c,
+                          "SELECT code,name FROM subjects WHERE id=?",
+                          r -> r.getString(1) + ": " + r.getString(2),
+                          value.id())
+                      .stream()
+                      .findFirst()
+                      .orElse("");
           ensureUniqueCode(c, "subjects", value.id(), 0, value.code());
           String sql =
               value.id() == 0
@@ -50,7 +70,20 @@ public final class JdbcCatalogRepository implements CatalogRepository {
             if (s.executeUpdate() != 1) throw new ValidationException("Дисциплина не найдена.");
           }
           long id = value.id() == 0 ? lastId(c) : value.id();
-          audit(c, "SAVE_SUBJECT", "subject", id, value.code() + ": " + value.name());
+          if (value.id() == 0)
+            JdbcSupport.execute(
+                c,
+                "INSERT INTO"
+                    + " ranking_profiles(subject_id,name,version,formula,target,weight_i,weight_f,weight_d,weight_a,weight_e,horizon,minimum_samples,warning_threshold,saved_at)"
+                    + " VALUES(?,'Основной',1,'rank-v1',3,0.30,0.25,0.20,0.15,0.10,365,10,1.5,?)",
+                id,
+                Instant.now().toString());
+          audit(
+              c,
+              "SAVE_SUBJECT",
+              "subject",
+              id,
+              before + " -> " + value.code() + ": " + value.name());
           return new Subject(id, value.code(), value.name());
         });
   }
@@ -59,6 +92,7 @@ public final class JdbcCatalogRepository implements CatalogRepository {
   public List<Topic> topics(long subjectId) {
     return database.read(
         c -> {
+          access.subject(c, subjectId);
           var result = new ArrayList<Topic>();
           try (var s =
               c.prepareStatement("SELECT * FROM topics WHERE subject_id=? ORDER BY code,id")) {
@@ -78,6 +112,19 @@ public final class JdbcCatalogRepository implements CatalogRepository {
   public Topic saveTopic(Topic value) {
     return database.transaction(
         c -> {
+          access.subject(c, value.subjectId());
+          if (value.id() > 0) access.topic(c, value.id());
+          String before =
+              value.id() == 0
+                  ? "Новая тема"
+                  : JdbcSupport.list(
+                          c,
+                          "SELECT code,name FROM topics WHERE id=?",
+                          r -> r.getString(1) + ": " + r.getString(2),
+                          value.id())
+                      .stream()
+                      .findFirst()
+                      .orElse("");
           try (var s = c.prepareStatement("SELECT id FROM subjects WHERE id=?")) {
             s.setLong(1, value.subjectId());
             try (var r = s.executeQuery()) {
@@ -97,7 +144,7 @@ public final class JdbcCatalogRepository implements CatalogRepository {
             if (s.executeUpdate() != 1) throw new ValidationException("Тема не найдена.");
           }
           long id = value.id() == 0 ? lastId(c) : value.id();
-          audit(c, "SAVE_TOPIC", "topic", id, value.code() + ": " + value.name());
+          audit(c, "SAVE_TOPIC", "topic", id, before + " -> " + value.code() + ": " + value.name());
           return new Topic(id, value.subjectId(), value.code(), value.name());
         });
   }
@@ -124,6 +171,7 @@ public final class JdbcCatalogRepository implements CatalogRepository {
   public List<Question> questions(long subjectId) {
     return database.read(
         c -> {
+          access.subject(c, subjectId);
           var list = new ArrayList<Question>();
           try (var s =
               c.prepareStatement(
@@ -173,6 +221,8 @@ public final class JdbcCatalogRepository implements CatalogRepository {
   }
 
   private Question save(Connection c, Question value) throws SQLException {
+    access.topic(c, value.topicId());
+    Question previous = null;
     long subjectId;
     try (var s = c.prepareStatement("SELECT subject_id FROM topics WHERE id=?")) {
       s.setLong(1, value.topicId());
@@ -182,7 +232,9 @@ public final class JdbcCatalogRepository implements CatalogRepository {
       }
     }
     if (value.id() > 0) {
+      access.question(c, value.id());
       var current = find(c, value.id());
+      previous = current;
       if (current.revision() != value.revision())
         throw new ValidationException("Вопрос уже изменён. Обновите список и откройте его заново.");
     }
@@ -227,6 +279,12 @@ public final class JdbcCatalogRepository implements CatalogRepository {
         if (s.executeUpdate() != 1) throw new ValidationException("Конфликт версии вопроса.");
       }
     }
+    if (previous == null || !sameContent(previous, value))
+      JdbcSupport.execute(
+          c,
+          "UPDATE questions SET reviewed_at=? WHERE id=?",
+          LocalDate.now(ZoneOffset.UTC).toString(),
+          id);
     try (var s =
         c.prepareStatement("INSERT INTO question_revisions VALUES(?,?,?,?,?,?,?,?,?,?,?,?)")) {
       s.setLong(1, id);
@@ -248,7 +306,9 @@ public final class JdbcCatalogRepository implements CatalogRepository {
         value.id() == 0 ? "CREATE_QUESTION" : "REVISE_QUESTION",
         "question",
         id,
-        "Версия " + revision + (value.archived() ? ", архив" : ""));
+        (previous == null ? "Новый вопрос" : describe(previous))
+            + " -> "
+            + describe(value.identified(id, revision)));
     return value.identified(id, revision);
   }
 
@@ -256,6 +316,7 @@ public final class JdbcCatalogRepository implements CatalogRepository {
   public List<Revision> history(long id) {
     return database.read(
         c -> {
+          access.question(c, id);
           var result = new ArrayList<Revision>();
           String sql =
               "SELECT"
@@ -272,41 +333,96 @@ public final class JdbcCatalogRepository implements CatalogRepository {
   }
 
   @Override
-  public List<AuditEntry> audit() {
+  public List<AuditEntry> audit(AuditFilter filter) {
     return database.read(
         c -> {
-          var list = new ArrayList<AuditEntry>();
-          try (var s = c.createStatement();
-              var r =
-                  s.executeQuery(
-                      "SELECT occurred_at,action,object_type,object_id,details FROM audit_log ORDER"
-                          + " BY id DESC LIMIT 500")) {
-            while (r.next())
-              list.add(
+          var user = access.require(c);
+          String from =
+              filter.from() == null
+                  ? ""
+                  : filter.from().atStartOfDay(ZoneId.systemDefault()).toInstant().toString();
+          String until =
+              filter.until() == null
+                  ? "9999"
+                  : filter
+                      .until()
+                      .plusDays(1)
+                      .atStartOfDay(ZoneId.systemDefault())
+                      .toInstant()
+                      .toString();
+          return JdbcSupport.list(
+              c,
+              "SELECT occurred_at,actor,action,object_type,object_id,result,details FROM audit_log"
+                  + " l WHERE occurred_at>=? AND occurred_at<? AND (?='' OR action=?) AND (?='' OR"
+                  + " object_type=?) AND (?='' OR instr(lower(details||' '||actor),lower(?))>0) AND"
+                  + " (?='ADMIN' OR actor=? OR EXISTS(SELECT 1 FROM teaching_assignments a JOIN"
+                  + " study_groups g ON g.id=a.group_id JOIN study_periods p ON p.id=a.period_id"
+                  + " WHERE a.subject_id=l.subject_id AND a.teacher_id=? AND a.active=1 AND"
+                  + " g.active=1 AND p.active=1)) ORDER BY id DESC LIMIT 5000",
+              r ->
                   new AuditEntry(
                       r.getString(1),
                       r.getString(2),
                       r.getString(3),
-                      r.getLong(4),
-                      r.getString(5)));
-          }
-          return List.copyOf(list);
+                      r.getString(4),
+                      r.getLong(5),
+                      r.getString(6),
+                      r.getString(7)),
+              from,
+              until,
+              filter.action(),
+              filter.action(),
+              filter.objectType(),
+              filter.objectType(),
+              filter.text(),
+              filter.text(),
+              user.role().name(),
+              user.login(),
+              user.id());
         });
   }
 
   private void audit(Connection c, String action, String type, long id, String details)
       throws SQLException {
-    try (var s =
-        c.prepareStatement(
-            "INSERT INTO audit_log(occurred_at,actor,action,object_type,object_id,details)"
-                + " VALUES(?,'LOCAL',?,?,?,?)")) {
-      s.setString(1, Instant.now().toString());
-      s.setString(2, action);
-      s.setString(3, type);
-      s.setLong(4, id);
-      s.setString(5, details);
-      s.executeUpdate();
-    }
+    Long subjectId =
+        switch (type) {
+          case "subject" -> id;
+          case "topic" -> access.topic(c, id);
+          case "question" -> access.question(c, id);
+          default -> null;
+        };
+    AuditLog.write(c, access.require(c).login(), action, type, id, subjectId, "SUCCESS", details);
+  }
+
+  private boolean sameContent(Question a, Question b) {
+    return a.topicId() == b.topicId()
+        && a.text().equals(b.text())
+        && a.guidance().equals(b.guidance())
+        && a.type() == b.type()
+        && a.difficulty() == b.difficulty()
+        && a.importance() == b.importance()
+        && a.maxPoints().equals(b.maxPoints());
+  }
+
+  private String describe(Question q) {
+    return "v"
+        + q.revision()
+        + "; тема="
+        + q.topicId()
+        + "; тип="
+        + q.type()
+        + "; сложность="
+        + q.difficulty()
+        + "; значимость="
+        + q.importance()
+        + "; баллы="
+        + q.maxPoints()
+        + "; архив="
+        + q.archived()
+        + "; текст="
+        + q.text()
+        + "; критерий="
+        + q.guidance();
   }
 
   private long lastId(Connection c) throws SQLException {

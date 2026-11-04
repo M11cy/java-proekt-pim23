@@ -18,5 +18,5 @@ public interface CatalogRepository {
 
   List<Revision> history(long questionId);
 
-  List<AuditEntry> audit();
+  List<AuditEntry> audit(AuditFilter filter);
 }

@@ -26,9 +26,10 @@ public final class CsvQuestionImporter {
     this.service = service;
   }
 
-  public ImportPreview preview(Path path) {
+  public ImportPreview preview(Path path, boolean skipDuplicates) {
     var questions = new ArrayList<Question>();
     var errors = new ArrayList<String>();
+    var skipped = new ArrayList<String>();
     try {
       if (Files.size(path) > 10 * 1024 * 1024) return failure("Размер CSV превышает 10 МБ.");
       String content = Files.readString(path, StandardCharsets.UTF_8);
@@ -85,7 +86,14 @@ public final class CsvQuestionImporter {
                     row.get("answer_guidance"),
                     false,
                     0);
-            banks.get(subject.id()).add(question);
+            var bank = banks.get(subject.id());
+            if (skipDuplicates
+                && bank.questions().stream()
+                    .anyMatch(q -> q.normalizedText().equals(question.normalizedText()))) {
+              skipped.add("Запись " + number + ": пропущено точное совпадение, включая архив.");
+              continue;
+            }
+            bank.add(question);
             questions.add(question);
           } catch (ValidationException e) {
             errors.add("Запись " + number + ": " + e.getMessage());
@@ -94,12 +102,13 @@ public final class CsvQuestionImporter {
           }
         }
       }
-      if (questions.isEmpty() && errors.isEmpty()) errors.add("Файл не содержит вопросов.");
+      if (questions.isEmpty() && errors.isEmpty() && skipped.isEmpty())
+        errors.add("Файл не содержит вопросов.");
     } catch (IOException | UncheckedIOException | IllegalArgumentException e) {
       errors.add(
           "Не удалось прочитать CSV: проверьте UTF-8, кавычки и разделитель ;. " + e.getMessage());
     }
-    return new ImportPreview(questions, errors);
+    return new ImportPreview(questions, errors, skipped);
   }
 
   public static BigDecimal parsePoints(String input) {
@@ -110,6 +119,6 @@ public final class CsvQuestionImporter {
   }
 
   private ImportPreview failure(String message) {
-    return new ImportPreview(List.of(), List.of(message));
+    return new ImportPreview(List.of(), List.of(message), List.of());
   }
 }
