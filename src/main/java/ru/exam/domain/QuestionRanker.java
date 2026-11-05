@@ -6,7 +6,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 public final class QuestionRanker {
-  public static final String FORMULA = "rank-v2";
+  public static final String FORMULA = "rank-v3";
 
   public record Result(
       Question question,
@@ -24,10 +24,10 @@ public final class QuestionRanker {
     long age = Math.max(0, ChronoUnit.DAYS.between(editedOn, date));
     var factors = List.of(
         (question.importance() - 1) / 4.0,
-        1.0 / (1.0 + uses),
+        uses == 0 ? 0.0 : 1.0 / (1.0 + uses),
         (question.difficulty() - 1) / 4.0,
         Math.max(0, 1 - age / (double) profile.horizon()),
-        discrepancy == null ? 0.5 : discrepancy / 4.0);
+        discrepancy == null ? 0.0 : discrepancy / 4.0);
 
     double sum = profile.weights().stream().mapToDouble(Double::doubleValue).sum();
     double score = 0;

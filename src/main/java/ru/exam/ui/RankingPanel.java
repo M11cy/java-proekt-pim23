@@ -216,6 +216,7 @@ final class RankingPanel extends JPanel {
             explanation.setText(calculation
                 + "\nI: значимость. F: редкость использования в Word. D: заданная сложность."
                 + "\nA: давность правки. E: расхождение по оценкам преподавателя."
+                + "\nБез документов Word вклад F равен 0. Без оценок вклад E равен 0."
                 + "\nРасчётная сложность = 1 + округление(рейтинг / 25).");
             onCalculated.run();
           });
@@ -237,7 +238,7 @@ final class RankingPanel extends JPanel {
         + "\nВклады [I, F, D, A, E]: " + r.contributions()
         + "\nДокументов Word: " + r.uses() + ". Ответов этой версии: " + r.answers()
         + "\nРасхождение: " + (r.discrepancy() == null
-            ? "нет оценок, используется нейтральное значение" : r.discrepancy())
+            ? "нет оценок, вклад E равен 0" : r.discrepancy())
         + (r.old() ? "\nВопрос давно не редактировался." : ""));
   }
 
