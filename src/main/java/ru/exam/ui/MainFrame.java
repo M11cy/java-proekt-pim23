@@ -61,7 +61,7 @@ public final class MainFrame extends JFrame {
   };
   private final JComboBox<String> auditAction = new JComboBox<>(), auditObject = new JComboBox<>();
   private CatalogController.Snapshot data =
-      new CatalogController.Snapshot(List.of(), List.of(), Map.of(), List.of());
+      new CatalogController.Snapshot(List.of(), List.of(), Map.of(), Map.of(), List.of());
   private final JComboBox<Subject> subject = new JComboBox<>();
   private final JComboBox<Object> topic = new JComboBox<>();
   private final JComboBox<Object> type =
@@ -108,7 +108,7 @@ public final class MainFrame extends JFrame {
     topic.setRenderer(SwingSupport.literalListRenderer());
     subjectList.setCellRenderer(SwingSupport.literalListRenderer());
     topicList.setCellRenderer(SwingSupport.literalListRenderer());
-    controller = new CatalogController(service, this::setBusy, status::setText, this::showError);
+    controller = new CatalogController(service, rankingService, this::setBusy, status::setText, this::showError);
     setDefaultCloseOperation(DO_NOTHING_ON_CLOSE);
     setMinimumSize(new Dimension(1050, 660));
     setSize(1180, 760);
@@ -118,7 +118,7 @@ public final class MainFrame extends JFrame {
     tabs.addTab("Дисциплины и темы", catalogPanel());
     tabs.addTab("Журнал изменений", auditPanel());
     var organizationPanel = new OrganizationPanel(organization, auth, service, controller, admin);
-    ranking = new RankingPanel(rankingService, controller);
+    ranking = new RankingPanel(rankingService, controller, this::reload);
     tabs.addTab("Учебная организация", organizationPanel);
     tabs.addTab("Ранжирование", ranking);
     if (admin)
@@ -208,6 +208,15 @@ public final class MainFrame extends JFrame {
             action("Импорт CSV", this::chooseCsv),
             action("Обновить", this::reload)));
     SwingSupport.table(questionsTable);
+    questionsTable.getColumnModel().getColumn(9).setCellRenderer(new DefaultTableCellRenderer() {
+      @Override
+      protected void setValue(Object value) {
+        super.setValue(value);
+        setHorizontalAlignment(SwingConstants.CENTER);
+        setForeground(new Color(180, 0, 0));
+        setToolTipText("!".equals(value) ? "Вопрос давно не редактировался" : null);
+      }
+    });
     questionsTable.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
     questionsTable.getColumnModel().getColumn(0).setPreferredWidth(45);
     questionsTable.getColumnModel().getColumn(1).setPreferredWidth(490);
@@ -913,7 +922,7 @@ public final class MainFrame extends JFrame {
 
   private final class QuestionModel extends AbstractTableModel {
     private final String[] columns = {
-      "ID", "Вопрос", "Тема", "Тип", "Сложность", "Значимость", "Макс. балл", "Статус"
+      "ID", "Вопрос", "Тема", "Тип", "Сложность", "Расчётная сложность", "Значимость", "Макс. балл", "Статус", "Давность"
     };
     private List<Question> rows = List.of();
 
@@ -941,8 +950,8 @@ public final class MainFrame extends JFrame {
     public Class<?> getColumnClass(int column) {
       return switch (column) {
         case 0 -> Long.class;
-        case 4, 5 -> Integer.class;
-        case 6 -> java.math.BigDecimal.class;
+        case 4, 5, 6 -> Integer.class;
+        case 7 -> java.math.BigDecimal.class;
         default -> String.class;
       };
     }
@@ -950,6 +959,7 @@ public final class MainFrame extends JFrame {
     @Override
     public Object getValueAt(int row, int column) {
       var q = rows.get(row);
+      var rank = data.rankings().get(q.id());
       return switch (column) {
         case 0 -> q.id();
         case 1 -> q.text().replace('\n', ' ');
@@ -961,9 +971,11 @@ public final class MainFrame extends JFrame {
                 .orElse("Тема удалена");
         case 3 -> q.type().toString();
         case 4 -> q.difficulty();
-        case 5 -> q.importance();
-        case 6 -> q.maxPoints();
-        case 7 -> q.archived() ? "Архив" : "Активен";
+        case 5 -> rank == null ? null : rank.difficulty();
+        case 6 -> q.importance();
+        case 7 -> q.maxPoints();
+        case 8 -> q.archived() ? "Архив" : "Активен";
+        case 9 -> rank != null && rank.old() ? "!" : "";
         default -> "";
       };
     }

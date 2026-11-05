@@ -13,7 +13,7 @@ import org.sqlite.SQLiteConfig;
 /** Все соединения закрываются до замены файла; операции сериализованы на экземпляре базы. */
 public final class Database {
   private static final List<String> MIGRATIONS =
-      List.of("V1__catalog.sql", "V2__organization_ranking.sql");
+      List.of("V1__catalog.sql", "V2__organization_ranking.sql", "V3__question_rankings.sql");
 
   @FunctionalInterface
   public interface Work<T> {
@@ -131,10 +131,19 @@ public final class Database {
   }
 
   public synchronized void initialize() {
+    initialize(true);
+  }
+
+  public static void prepareRestore(Path staged) {
+    validateBackup(staged);
+    new Database(staged).initialize(false);
+  }
+
+  private void initialize(boolean keepMigrationBackup) {
     try {
       Files.createDirectories(path.getParent());
       int previous = read(Database::version);
-      if (previous > 0 && previous < MIGRATIONS.size()) {
+      if (keepMigrationBackup && previous > 0 && previous < MIGRATIONS.size()) {
         Path dir = path.getParent().resolve("backups");
         Files.createDirectories(dir);
         snapshot(dir.resolve("before-migration-" + UUID.randomUUID() + ".db"));
@@ -201,7 +210,8 @@ public final class Database {
     try (var c =
         DriverManager.getConnection(
             "jdbc:sqlite:" + source.toAbsolutePath(), config.toProperties())) {
-      if (version(c) != MIGRATIONS.size())
+      int backupVersion = version(c);
+      if (backupVersion < 2)
         throw new IllegalArgumentException("Копия имеет несовместимую версию схемы.");
       checkIntegrity(c);
       try (var s = c.createStatement();
@@ -231,10 +241,15 @@ public final class Database {
               Map.entry(
                   "ranking_profiles",
                   "id,subject_id,name,version,formula,target,weight_i,weight_f,weight_d,weight_a,weight_e,horizon,minimum_samples,warning_threshold,saved_at"),
+              Map.entry("question_rankings", "question_id,revision,profile_id,calculated_on,score,difficulty"),
+              Map.entry("ranking_word_uses", "document_key,question_id"),
+              Map.entry("ranking_exam_discrepancies", "result_key,question_id,revision,discrepancy"),
               Map.entry(
                   "ranking_observations",
                   "id,event_key,question_id,revision,occurred_on,uses,attempts,ratio_sum,source,synthetic"));
       for (var table : columns.entrySet()) {
+        if (backupVersion == 2 && List.of("question_rankings", "ranking_word_uses",
+            "ranking_exam_discrepancies").contains(table.getKey())) continue;
         try (var s = c.createStatement();
             var r =
                 s.executeQuery(

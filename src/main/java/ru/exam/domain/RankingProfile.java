@@ -15,8 +15,6 @@ public record RankingProfile(
     int horizon,
     int minimumSamples,
     double warningThreshold) {
-  public static final String FORMULA = "rank-v1";
-
   public RankingProfile {
     name = Organization.text(name, "Название профиля", 100);
     if (id < 0

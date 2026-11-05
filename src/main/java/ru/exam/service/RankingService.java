@@ -107,171 +107,119 @@ public final class RankingService {
         });
   }
 
-  public List<QuestionRanker.Result> calculate(
-      long subjectId, long profileId, LocalDate date, boolean includeSynthetic) {
-    if (date == null || date.isAfter(LocalDate.now(ZoneOffset.UTC)))
-      throw new ValidationException("Дата расчёта не может быть в будущем.");
+  public record BankRank(Integer difficulty, boolean old) {}
+
+  public Map<Long, BankRank> bankRanks(long subjectId) {
+    return database.read(c -> {
+      access.subject(c, subjectId);
+      var ranks = new HashMap<Long, BankRank>();
+      try (var statement = c.prepareStatement("""
+          SELECT q.id,
+                 CASE WHEN r.revision=q.current_revision AND q.archived=0 THEN r.difficulty END,
+                 julianday(?) - julianday(q.reviewed_at) >= coalesce(p.horizon,365)
+          FROM questions q JOIN topics t ON t.id=q.topic_id
+          LEFT JOIN question_rankings r ON r.question_id=q.id
+          LEFT JOIN ranking_profiles p ON p.id=r.profile_id AND p.subject_id=t.subject_id
+          WHERE t.subject_id=?
+          """)) {
+        statement.setString(1, LocalDate.now(ZoneOffset.UTC).toString());
+        statement.setLong(2, subjectId);
+        try (var rows = statement.executeQuery()) {
+          while (rows.next()) {
+            int value = rows.getInt(2);
+            Integer difficulty = rows.wasNull() ? null : value;
+            ranks.put(rows.getLong(1), new BankRank(difficulty, rows.getBoolean(3)));
+          }
+        }
+      }
+      return Map.copyOf(ranks);
+    });
+  }
+
+  public List<QuestionRanker.Result> calculate(long subjectId, long profileId) {
     synchronized (database) {
-      var selected =
-          profiles(subjectId).stream()
-              .filter(p -> p.id() == profileId)
-              .findFirst()
-              .orElseThrow(() -> new ValidationException("Профиль не найден."));
+      var selected = profiles(subjectId).stream()
+          .filter(p -> p.id() == profileId)
+          .findFirst()
+          .orElseThrow(() -> new ValidationException("Профиль не найден."));
       var questions = catalog.questions(subjectId).stream().filter(q -> !q.archived()).toList();
-      return database.transaction(
-          c -> {
-            var actor = access.require(c);
-            access.subject(c, subjectId);
-            var result = new ArrayList<QuestionRanker.Result>();
-            for (var q : questions) {
-              var observations =
-                  list(
-                      c,
-                      "SELECT"
-                          + " event_key,question_id,revision,occurred_on,uses,attempts,ratio_sum,source,synthetic"
-                          + " FROM ranking_observations WHERE question_id=? AND occurred_on>=? AND"
-                          + " occurred_on<=? AND (?=1 OR synthetic=0)",
-                      this::observation,
-                      q.id(),
-                      date.minusDays(selected.horizon()).toString(),
-                      date.toString(),
-                      includeSynthetic);
-              long uses = 0, attempts = 0;
-              double ratioSum = 0;
-              boolean synthetic = false;
-              for (var o : observations) {
-                uses += o.uses();
-                if (o.revision() == q.revision()) {
-                  attempts += o.attempts();
-                  ratioSum += o.ratioSum();
-                }
-                synthetic |= o.synthetic();
-              }
-              var reviewed =
-                  list(
-                          c,
-                          "SELECT reviewed_at FROM questions WHERE id=?",
-                          r -> LocalDate.parse(r.getString(1)),
-                          q.id())
-                      .getFirst();
-              result.add(
-                  ranker.calculate(
-                      q,
-                      selected,
-                      new QuestionRanker.Statistics(uses, attempts, ratioSum, reviewed, synthetic),
-                      date));
-            }
-            result.sort(
-                Comparator.comparingDouble(QuestionRanker.Result::score)
-                    .reversed()
-                    .thenComparingLong(r -> r.question().id()));
-            AuditLog.write(
-                c,
-                actor.login(),
-                "CALCULATE_RANKING",
-                "ranking_profile",
-                profileId,
-                subjectId,
-                "SUCCESS",
-                selected
-                    + "; rank-v1; дата="
-                    + date
-                    + "; вопросов="
-                    + result.size()
-                    + "; включать синтетические="
-                    + includeSynthetic);
-            return List.copyOf(result);
-          });
+      var date = LocalDate.now(ZoneOffset.UTC);
+      return database.transaction(c -> {
+        var actor = access.require(c);
+        access.subject(c, subjectId);
+        var results = new ArrayList<QuestionRanker.Result>();
+        try (var save = c.prepareStatement("""
+            INSERT INTO question_rankings(question_id,revision,profile_id,calculated_on,score,difficulty)
+            VALUES(?,?,?,?,?,?)
+            ON CONFLICT(question_id) DO UPDATE SET revision=excluded.revision,
+              profile_id=excluded.profile_id, calculated_on=excluded.calculated_on,
+              score=excluded.score, difficulty=excluded.difficulty
+            """)) {
+          for (var question : questions) {
+            var result = list(c, """
+                SELECT q.reviewed_at,
+                       (SELECT count(*) FROM ranking_word_uses w WHERE w.question_id=q.id),
+                       count(e.discrepancy), avg(e.discrepancy)
+                FROM questions q LEFT JOIN ranking_exam_discrepancies e
+                  ON e.question_id=q.id AND e.revision=q.current_revision
+                WHERE q.id=? GROUP BY q.id
+                """, row -> ranker.calculate(question, selected, row.getLong(2), row.getLong(3),
+                    (Double) row.getObject(4), LocalDate.parse(row.getString(1)), date),
+                question.id()).getFirst();
+            results.add(result);
+            save.setLong(1, question.id());
+            save.setInt(2, question.revision());
+            save.setLong(3, profileId);
+            save.setString(4, date.toString());
+            save.setDouble(5, result.score());
+            save.setInt(6, result.difficulty());
+            save.addBatch();
+          }
+          save.executeBatch();
+        }
+        results.sort(Comparator.comparingDouble(QuestionRanker.Result::score).reversed()
+            .thenComparingLong(r -> r.question().id()));
+        AuditLog.write(c, actor.login(), "CALCULATE_RANKING", "ranking_profile", profileId,
+            subjectId, "SUCCESS", selected + ", " + QuestionRanker.FORMULA
+                + ", сохранено вопросов: " + results.size());
+        return List.copyOf(results);
+      });
     }
   }
 
-  public void recordObservation(RankingObservation value) {
-    database.transaction(
-        c -> {
-          var actor = access.require(c);
-          long subjectId = access.question(c, value.questionId());
-          if (!list(
-                  c,
-                  "SELECT id FROM ranking_observations WHERE event_key=?",
-                  r -> r.getLong(1),
-                  value.eventKey())
-              .isEmpty())
-            throw new ValidationException("Наблюдение с таким ключом уже зарегистрировано.");
-          execute(
-              c,
-              "INSERT INTO"
-                  + " ranking_observations(event_key,question_id,revision,occurred_on,uses,attempts,ratio_sum,source,synthetic)"
-                  + " VALUES(?,?,?,?,?,?,?,?,?)",
-              value.eventKey(),
-              value.questionId(),
-              value.revision(),
-              value.occurredOn().toString(),
-              value.uses(),
-              value.attempts(),
-              value.ratioSum(),
-              value.source(),
-              value.synthetic());
-          AuditLog.write(
-              c,
-              actor.login(),
-              "ADD_OBSERVATION",
-              "question",
-              value.questionId(),
-              subjectId,
-              "SUCCESS",
-              "v"
-                  + value.revision()
-                  + "; дата="
-                  + value.occurredOn()
-                  + "; источник="
-                  + value.source()
-                  + "; синтетические="
-                  + value.synthetic()
-                  + "; использований="
-                  + value.uses()
-                  + "; ответов="
-                  + value.attempts()
-                  + "; сумма долей="
-                  + value.ratioSum());
-          return null;
-        });
+  /** Вызывается после успешного создания документа. Ключ документа должен быть стабильным. */
+  public void recordWordUsage(long subjectId, String documentKey, List<Long> questionIds) {
+    String key = Organization.text(documentKey, "Ключ документа", 200);
+    var ids = Set.copyOf(questionIds);
+    if (ids.isEmpty()) throw new ValidationException("В документе нет вопросов.");
+    database.transaction(c -> {
+      access.subject(c, subjectId);
+      for (long id : ids) {
+        if (access.question(c, id) != subjectId)
+          throw new ValidationException("Вопрос относится к другой дисциплине.");
+        execute(c, """
+            INSERT INTO ranking_word_uses(document_key,question_id) VALUES(?,?)
+            ON CONFLICT(document_key,question_id) DO NOTHING
+            """, key, id);
+      }
+      return null;
+    });
   }
 
-  public List<RankingObservation> observations(long questionId) {
-    return database.read(
-        c -> {
-          access.question(c, questionId);
-          return list(
-              c,
-              "SELECT"
-                  + " event_key,question_id,revision,occurred_on,uses,attempts,ratio_sum,source,synthetic"
-                  + " FROM ranking_observations WHERE question_id=? ORDER BY occurred_on,id",
-              this::observation,
-              questionId);
-        });
-  }
-
-  public void confirmReview(long questionId) {
-    database.transaction(
-        c -> {
-          var user = access.require(c);
-          long subjectId = access.question(c, questionId);
-          execute(
-              c,
-              "UPDATE questions SET reviewed_at=? WHERE id=?",
-              LocalDate.now(ZoneOffset.UTC).toString(),
-              questionId);
-          AuditLog.write(
-              c,
-              user.login(),
-              "REVIEW_QUESTION",
-              "question",
-              questionId,
-              subjectId,
-              "SUCCESS",
-              "Подтверждён пересмотр актуальности вопроса");
-          return null;
-        });
+  /** Сохраняет оценку преподавателя от 0 до 4 для ответа на конкретную версию вопроса. */
+  public void recordExamDiscrepancy(String resultKey, long questionId, int revision, int discrepancy) {
+    String key = Organization.text(resultKey, "Ключ результата экзамена", 200);
+    if (revision < 1 || discrepancy < 0 || discrepancy > 4)
+      throw new ValidationException("Укажите версию вопроса и расхождение от 0 до 4.");
+    database.transaction(c -> {
+      access.question(c, questionId);
+      execute(c, """
+          INSERT INTO ranking_exam_discrepancies(result_key,question_id,revision,discrepancy)
+          VALUES(?,?,?,?) ON CONFLICT(result_key,question_id,revision)
+          DO UPDATE SET discrepancy=excluded.discrepancy
+          """, key, questionId, revision, discrepancy);
+      return null;
+    });
   }
 
   private RankingProfile profile(ResultSet r) throws SQLException {
@@ -287,16 +235,4 @@ public final class RankingService {
         r.getDouble(13));
   }
 
-  private RankingObservation observation(ResultSet r) throws SQLException {
-    return new RankingObservation(
-        r.getString(1),
-        r.getLong(2),
-        r.getInt(3),
-        LocalDate.parse(r.getString(4)),
-        r.getInt(5),
-        r.getInt(6),
-        r.getDouble(7),
-        r.getString(8),
-        r.getBoolean(9));
-  }
 }

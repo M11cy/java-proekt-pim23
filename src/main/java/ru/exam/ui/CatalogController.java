@@ -15,9 +15,11 @@ public final class CatalogController {
       List<Subject> subjects,
       List<Topic> topics,
       Map<Long, List<Question>> questions,
+      Map<Long, RankingService.BankRank> rankings,
       List<AuditEntry> audit) {}
 
   private final CatalogService service;
+  private final RankingService ranking;
   private final Consumer<Boolean> busy;
   private final Consumer<String> status;
   private final Consumer<Throwable> error;
@@ -25,10 +27,12 @@ public final class CatalogController {
 
   public CatalogController(
       CatalogService service,
+      RankingService ranking,
       Consumer<Boolean> busy,
       Consumer<String> status,
       Consumer<Throwable> error) {
     this.service = service;
+    this.ranking = ranking;
     this.busy = busy;
     this.status = status;
     this.error = error;
@@ -79,12 +83,14 @@ public final class CatalogController {
           var subjects = service.subjects();
           var topics = new ArrayList<Topic>();
           var questions = new HashMap<Long, List<Question>>();
+          var ranks = new HashMap<Long, RankingService.BankRank>();
           for (var s : subjects) {
             topics.addAll(service.topics(s.id()));
             questions.put(s.id(), service.questions(s.id()));
+            ranks.putAll(ranking.bankRanks(s.id()));
           }
           return new Snapshot(
-              subjects, List.copyOf(topics), Map.copyOf(questions), service.audit());
+              subjects, List.copyOf(topics), Map.copyOf(questions), Map.copyOf(ranks), service.audit());
         },
         success,
         error);

@@ -57,8 +57,7 @@ public final class BackupService {
           throw new ValidationException("Выберите отдельный файл резервной копии.");
         staged = Files.createTempFile(current.getParent(), ".restore-", ".db");
         Files.copy(source, staged, StandardCopyOption.REPLACE_EXISTING);
-        Database.restrict(staged);
-        Database.validateBackup(staged);
+        Database.prepareRestore(staged);
         if (Files.exists(Path.of(current + "-wal")) || Files.exists(Path.of(current + "-journal")))
           throw new ValidationException(
               "У базы есть незавершённый журнал. Перезапустите приложение и повторите"
