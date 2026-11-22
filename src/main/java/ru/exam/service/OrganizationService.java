@@ -79,7 +79,12 @@ public final class OrganizationService {
                   c,
                   "SELECT id,teacher_id,subject_id,group_id,period_id,active FROM"
                       + " teaching_assignments"
-                      + (admin ? " ORDER BY id" : " WHERE teacher_id=? AND active=1 ORDER BY id"),
+                      + (admin
+                          ? " ORDER BY id"
+                          : " WHERE teacher_id=? AND active=1 AND EXISTS(SELECT 1 FROM study_groups"
+                              + " g WHERE g.id=group_id AND g.active=1) AND EXISTS(SELECT 1 FROM"
+                              + " study_periods p WHERE p.id=period_id AND p.active=1) ORDER BY"
+                              + " id"),
                   r ->
                       new Assignment(
                           r.getLong(1),
@@ -134,7 +139,7 @@ public final class OrganizationService {
           var actor = access.admin(c);
           unique(c, "students", "number", value.number(), value.id());
           exists(c, "study_groups", value.groupId(), value.active());
-          String before = old(c, "students", value.id());
+          String before = studentLabel(c, value.id());
           if (value.id() == 0)
             execute(
                 c,
@@ -154,7 +159,7 @@ public final class OrganizationService {
                     value.active(),
                     value.id()));
           long id = value.id() == 0 ? lastId(c) : value.id();
-          audit(c, actor, "student", id, before, value.toString(), null);
+          audit(c, actor, "student", id, before, studentLabel(c, id), null);
           return new Student(id, value.groupId(), value.number(), value.name(), value.active());
         });
   }
@@ -230,7 +235,7 @@ public final class OrganizationService {
           if (!duplicates.isEmpty())
             throw new ValidationException(
                 "Такое назначение уже существует. Измените его состояние.");
-          String before = old(c, "teaching_assignments", value.id());
+          String before = assignmentLabel(c, value.id());
           if (value.id() == 0)
             execute(
                 c,
@@ -254,7 +259,7 @@ public final class OrganizationService {
                     value.active(),
                     value.id()));
           long id = value.id() == 0 ? lastId(c) : value.id();
-          audit(c, actor, "assignment", id, before, value.toString(), value.subjectId());
+          audit(c, actor, "assignment", id, before, assignmentLabel(c, id), value.subjectId());
           return new Assignment(
               id,
               value.teacherId(),
@@ -263,6 +268,49 @@ public final class OrganizationService {
               value.periodId(),
               value.active());
         });
+  }
+
+  private String studentLabel(Connection c, long id) throws SQLException {
+    return list(
+            c,
+            """
+            SELECT s.name,s.number,g.name,s.active FROM students s
+            JOIN study_groups g ON g.id=s.group_id WHERE s.id=?
+            """,
+            r ->
+                r.getString(1)
+                    + " ("
+                    + r.getString(2)
+                    + "), группа "
+                    + r.getString(3)
+                    + (r.getBoolean(4) ? ", активен" : ", архив"),
+            id)
+        .stream()
+        .findFirst()
+        .orElse("Новая запись");
+  }
+
+  private String assignmentLabel(Connection c, long id) throws SQLException {
+    return list(
+            c,
+            """
+SELECT u.name,s.name,g.name,p.name,a.active FROM teaching_assignments a
+JOIN users u ON u.id=a.teacher_id JOIN subjects s ON s.id=a.subject_id
+JOIN study_groups g ON g.id=a.group_id JOIN study_periods p ON p.id=a.period_id WHERE a.id=?
+""",
+            r ->
+                r.getString(1)
+                    + " / "
+                    + r.getString(2)
+                    + " / "
+                    + r.getString(3)
+                    + " / "
+                    + r.getString(4)
+                    + (r.getBoolean(5) ? ", активно" : ", архив"),
+            id)
+        .stream()
+        .findFirst()
+        .orElse("Новая запись");
   }
 
   private void changed(int count) {

@@ -13,7 +13,11 @@ import org.sqlite.SQLiteConfig;
 /** Все соединения закрываются до замены файла; операции сериализованы на экземпляре базы. */
 public final class Database {
   private static final List<String> MIGRATIONS =
-      List.of("V1__catalog.sql", "V2__organization_ranking.sql", "V3__question_rankings.sql");
+      List.of(
+          "V1__catalog.sql",
+          "V2__organization_ranking.sql",
+          "V3__question_rankings.sql",
+          "V4__tickets.sql");
 
   @FunctionalInterface
   public interface Work<T> {
@@ -241,15 +245,30 @@ public final class Database {
               Map.entry(
                   "ranking_profiles",
                   "id,subject_id,name,version,formula,target,weight_i,weight_f,weight_d,weight_a,weight_e,horizon,minimum_samples,warning_threshold,saved_at"),
-              Map.entry("question_rankings", "question_id,revision,profile_id,calculated_on,score,difficulty"),
+              Map.entry(
+                  "question_rankings",
+                  "question_id,revision,profile_id,calculated_on,score,difficulty"),
+              Map.entry(
+                  "ticket_sets",
+                  "id,subject_id,subject_name,name,algorithm,created_at,ticket_count,repeat_limit,target,deviation,seed,budget,required,excluded,topic_quotas,set_quotas,type_quotas,weights,initial,selected,organization,period,signature,approval,approved_at,version"),
+              Map.entry(
+                  "ticket_slots", "set_id,position,topic_id,type,min_difficulty,max_difficulty"),
+              Map.entry(
+                  "ticket_bank_snapshot",
+                  "set_id,question_id,revision,topic_id,topic_name,type,difficulty,points_scaled,rank,text"),
               Map.entry("ranking_word_uses", "document_key,question_id"),
-              Map.entry("ranking_exam_discrepancies", "result_key,question_id,revision,discrepancy"),
+              Map.entry(
+                  "ranking_exam_discrepancies", "result_key,question_id,revision,discrepancy"),
               Map.entry(
                   "ranking_observations",
                   "id,event_key,question_id,revision,occurred_on,uses,attempts,ratio_sum,source,synthetic"));
       for (var table : columns.entrySet()) {
-        if (backupVersion == 2 && List.of("question_rankings", "ranking_word_uses",
-            "ranking_exam_discrepancies").contains(table.getKey())) continue;
+        if (backupVersion < 4
+            && List.of("ticket_sets", "ticket_slots", "ticket_bank_snapshot")
+                .contains(table.getKey())) continue;
+        if (backupVersion == 2
+            && List.of("question_rankings", "ranking_word_uses", "ranking_exam_discrepancies")
+                .contains(table.getKey())) continue;
         try (var s = c.createStatement();
             var r =
                 s.executeQuery(

@@ -20,6 +20,7 @@ public final class MainFrame extends JFrame {
   private final boolean admin;
   private final Runnable onLogout;
   private final RankingPanel ranking;
+  private final TicketPanel ticketPanel;
   private final Map<Component, Boolean> enabledBefore = new IdentityHashMap<>();
   private final JTextField auditFrom = new JTextField(10),
       auditUntil = new JTextField(10),
@@ -44,7 +45,12 @@ public final class MainFrame extends JFrame {
     "ADD_OBSERVATION",
     "REVIEW_QUESTION",
     "CREATE_BACKUP",
-    "RESTORE_BACKUP"
+    "RESTORE_BACKUP",
+    "GENERATE_TICKETS",
+    "EDIT_TICKETS",
+    "BALANCE_TICKETS",
+    "APPROVE_TICKETS",
+    "EXPORT_TICKETS"
   };
   private static final String[] AUDIT_OBJECTS = {
     "",
@@ -57,7 +63,8 @@ public final class MainFrame extends JFrame {
     "period",
     "assignment",
     "ranking_profile",
-    "backup"
+    "backup",
+    "ticket_set"
   };
   private final JComboBox<String> auditAction = new JComboBox<>(), auditObject = new JComboBox<>();
   private CatalogController.Snapshot data =
@@ -97,6 +104,7 @@ public final class MainFrame extends JFrame {
       OrganizationService organization,
       RankingService rankingService,
       BackupService backups,
+      TicketService tickets,
       Runnable onLogout) {
     super("Экзаменационные материалы");
     this.service = service;
@@ -108,7 +116,9 @@ public final class MainFrame extends JFrame {
     topic.setRenderer(SwingSupport.literalListRenderer());
     subjectList.setCellRenderer(SwingSupport.literalListRenderer());
     topicList.setCellRenderer(SwingSupport.literalListRenderer());
-    controller = new CatalogController(service, rankingService, this::setBusy, status::setText, this::showError);
+    controller =
+        new CatalogController(
+            service, rankingService, this::setBusy, status::setText, this::showError);
     setDefaultCloseOperation(DO_NOTHING_ON_CLOSE);
     setMinimumSize(new Dimension(1050, 660));
     setSize(1180, 760);
@@ -117,10 +127,12 @@ public final class MainFrame extends JFrame {
     tabs.addTab("Банк вопросов", bankPanel());
     tabs.addTab("Дисциплины и темы", catalogPanel());
     tabs.addTab("Журнал изменений", auditPanel());
-    var organizationPanel = new OrganizationPanel(organization, auth, service, controller, admin);
+    var organizationPanel = new OrganizationPanel(organization, auth, service, controller, user);
     ranking = new RankingPanel(rankingService, controller, this::reload);
     tabs.addTab("Учебная организация", organizationPanel);
     tabs.addTab("Ранжирование", ranking);
+    ticketPanel = new TicketPanel(tickets, controller, service, organization);
+    tabs.addTab("Билеты", ticketPanel);
     if (admin)
       tabs.addTab(
           "Резервные копии",
@@ -135,6 +147,7 @@ public final class MainFrame extends JFrame {
         e -> {
           if (tabs.getSelectedComponent() == organizationPanel) organizationPanel.refresh();
           if (tabs.getSelectedComponent() == ranking) ranking.refresh();
+          if (tabs.getSelectedComponent() == ticketPanel) ticketPanel.refresh();
         });
     add(
         SwingSupport.row(
@@ -208,15 +221,19 @@ public final class MainFrame extends JFrame {
             action("Импорт CSV", this::chooseCsv),
             action("Обновить", this::reload)));
     SwingSupport.table(questionsTable);
-    questionsTable.getColumnModel().getColumn(9).setCellRenderer(new DefaultTableCellRenderer() {
-      @Override
-      protected void setValue(Object value) {
-        super.setValue(value);
-        setHorizontalAlignment(SwingConstants.CENTER);
-        setForeground(new Color(180, 0, 0));
-        setToolTipText("!".equals(value) ? "Вопрос давно не редактировался" : null);
-      }
-    });
+    questionsTable
+        .getColumnModel()
+        .getColumn(9)
+        .setCellRenderer(
+            new DefaultTableCellRenderer() {
+              @Override
+              protected void setValue(Object value) {
+                super.setValue(value);
+                setHorizontalAlignment(SwingConstants.CENTER);
+                setForeground(new Color(180, 0, 0));
+                setToolTipText("!".equals(value) ? "Вопрос давно не редактировался" : null);
+              }
+            });
     questionsTable.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
     questionsTable.getColumnModel().getColumn(0).setPreferredWidth(45);
     questionsTable.getColumnModel().getColumn(1).setPreferredWidth(490);
@@ -422,6 +439,7 @@ public final class MainFrame extends JFrame {
     updateCatalogTopics();
     applyFilters();
     ranking.setSubjects(data.subjects());
+    ticketPanel.setSubjects(data.subjects());
     fillAudit(data.audit());
     if (!auditFrom.getText().isBlank()
         || !auditUntil.getText().isBlank()
@@ -881,6 +899,7 @@ public final class MainFrame extends JFrame {
       case "period" -> "Учебный период";
       case "assignment" -> "Назначение";
       case "ranking_profile" -> "Профиль ранжирования";
+      case "ticket_set" -> "Комплект билетов";
       case "backup" -> "Резервная копия";
       default -> value;
     };
@@ -907,6 +926,11 @@ public final class MainFrame extends JFrame {
       case "REVIEW_QUESTION" -> "Подтверждение пересмотра";
       case "CREATE_BACKUP" -> "Создание копии";
       case "RESTORE_BACKUP" -> "Восстановление копии";
+      case "GENERATE_TICKETS" -> "Генерация билетов";
+      case "EDIT_TICKETS" -> "Замена вопроса в билете";
+      case "BALANCE_TICKETS" -> "Балансировка билетов";
+      case "APPROVE_TICKETS" -> "Утверждение комплекта";
+      case "EXPORT_TICKETS" -> "Экспорт билетов в Word";
       default -> value;
     };
   }
@@ -922,7 +946,16 @@ public final class MainFrame extends JFrame {
 
   private final class QuestionModel extends AbstractTableModel {
     private final String[] columns = {
-      "ID", "Вопрос", "Тема", "Тип", "Сложность", "Расчётная сложность", "Значимость", "Макс. балл", "Статус", "Давность"
+      "ID",
+      "Вопрос",
+      "Тема",
+      "Тип",
+      "Сложность",
+      "Расчётная сложность",
+      "Значимость",
+      "Макс. балл",
+      "Статус",
+      "Давность"
     };
     private List<Question> rows = List.of();
 

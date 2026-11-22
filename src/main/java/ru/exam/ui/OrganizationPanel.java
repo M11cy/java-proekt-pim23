@@ -21,6 +21,7 @@ final class OrganizationPanel extends JPanel {
   private final CatalogService catalog;
   private final CatalogController controller;
   private final boolean admin;
+  private final User currentUser;
   private OrganizationService.Snapshot data =
       new OrganizationService.Snapshot(List.of(), List.of(), List.of(), List.of());
   private List<User> users = List.of();
@@ -36,13 +37,14 @@ final class OrganizationPanel extends JPanel {
       AuthService auth,
       CatalogService catalog,
       CatalogController controller,
-      boolean admin) {
+      User currentUser) {
     super(new BorderLayout());
     this.service = service;
     this.auth = auth;
     this.catalog = catalog;
     this.controller = controller;
-    this.admin = admin;
+    this.admin = currentUser.role() == User.Role.ADMIN;
+    this.currentUser = currentUser;
     userRows =
         new Records<>(
             new String[] {"ID", "Логин", "ФИО", "Роль", "Активен"},
@@ -115,13 +117,18 @@ final class OrganizationPanel extends JPanel {
   private String groupName(long id) {
     return data.groups().stream()
         .filter(g -> g.id() == id)
-        .map(Group::code)
+        .map(Group::name)
         .findFirst()
-        .orElse("#" + id);
+        .orElse("Группа недоступна");
   }
 
   private String userName(long id) {
-    return users.stream().filter(u -> u.id() == id).map(User::name).findFirst().orElse("#" + id);
+    if (!admin && id == currentUser.id()) return currentUser.name();
+    return users.stream()
+        .filter(u -> u.id() == id)
+        .map(User::name)
+        .findFirst()
+        .orElse("Преподаватель недоступен");
   }
 
   private String subjectName(long id) {
@@ -129,7 +136,7 @@ final class OrganizationPanel extends JPanel {
         .filter(s -> s.id() == id)
         .map(Subject::name)
         .findFirst()
-        .orElse("#" + id);
+        .orElse("Дисциплина недоступна");
   }
 
   private String periodName(long id) {
@@ -137,7 +144,7 @@ final class OrganizationPanel extends JPanel {
         .filter(p -> p.id() == id)
         .map(Period::name)
         .findFirst()
-        .orElse("#" + id);
+        .orElse("Период недоступен");
   }
 
   private void editUser(User value) {

@@ -51,6 +51,7 @@ public final class App {
       var service = new CatalogService(new JdbcCatalogRepository(database, access), access);
       var organization = new OrganizationService(database, access);
       var ranking = new RankingService(database, access, service);
+      var tickets = new TicketService(database, access);
       var backups = new BackupService(database, access, session);
       boolean setup = !auth.hasUsers();
       SwingUtilities.invokeLater(
@@ -79,6 +80,7 @@ public final class App {
                                         organization,
                                         ranking,
                                         backups,
+                                        tickets,
                                         () -> accept(false))
                                     .setVisible(true));
                     dialog.setVisible(true);
