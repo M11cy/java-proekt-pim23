@@ -10,3 +10,4 @@ distribution/
 *.jar
 .env
 .env.*
+*.session

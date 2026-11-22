@@ -1,5 +1,6 @@
 package ru.exam.service;
 
+import java.io.IOException;
 import java.sql.*;
 import java.time.Instant;
 import java.util.*;
@@ -10,6 +11,7 @@ public final class AuthService {
   private final Database database;
   private final Session session;
   private final AccessControl access;
+  private final RememberedLogin remembered;
   private final PasswordHasher passwords = new PasswordHasher();
   private final String dummyHash = passwords.hash("unavailable-account-password".toCharArray());
 
@@ -17,6 +19,7 @@ public final class AuthService {
     this.database = database;
     this.session = session;
     this.access = access;
+    this.remembered = new RememberedLogin(database);
   }
 
   private String loginName(String login) {
@@ -283,26 +286,42 @@ public final class AuthService {
     }
   }
 
-  public void logout() {
+  public boolean rememberLogin() {
     try {
-      if (session.user() != null)
-        database.transaction(
-            c -> {
-              var actor = session.user();
-              AuditLog.write(
-                  c,
-                  actor.login(),
-                  "LOGOUT",
-                  "user",
-                  actor.id(),
-                  null,
-                  "SUCCESS",
-                  "Выход из системы");
-              return null;
-            });
-    } finally {
-      session.clear();
+      remembered.save(access.current());
+      return true;
+    } catch (IOException | StorageException e) {
+      return false;
     }
+  }
+
+  public boolean resumeLogin() {
+    User user = remembered.resume();
+    if (user == null) return false;
+    session.start(user);
+    return true;
+  }
+
+  public void logout() {
+    endSession(true);
+    remembered.deleteFile();
+  }
+
+  public void closeSession() {
+    endSession(false);
+  }
+
+  private void endSession(boolean forget) {
+    User actor = session.user();
+    database.transaction(c -> {
+      if (forget) RememberedLogin.revoke(c);
+      if (actor != null) {
+        AuditLog.write(c, actor.login(), "LOGOUT", "user", actor.id(), null, "SUCCESS",
+            forget ? "Выход из аккаунта" : "Приложение закрыто");
+      }
+      return null;
+    });
+    session.clear();
   }
 
   private User byLogin(Connection c, String login) throws SQLException {

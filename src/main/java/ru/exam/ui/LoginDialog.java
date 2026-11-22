@@ -16,6 +16,7 @@ public final class LoginDialog extends JDialog {
     var name = new JTextField(24);
     var password = new JPasswordField(24);
     var confirm = new JPasswordField(24);
+    var remember = new JCheckBox("Запомнить вход на этом устройстве");
     var error = SwingSupport.label(" ");
     var submit = new JButton(setup ? "Создать администратора" : "Войти");
     var cancel =
@@ -40,7 +41,8 @@ public final class LoginDialog extends JDialog {
     var root = new JPanel(new BorderLayout(8, 8));
     root.add(fields, BorderLayout.CENTER);
     var bottom = new JPanel(new BorderLayout());
-    bottom.add(error, BorderLayout.NORTH);
+    bottom.add(remember, BorderLayout.NORTH);
+    bottom.add(error, BorderLayout.CENTER);
     bottom.add(SwingSupport.row(submit, cancel), BorderLayout.SOUTH);
     root.add(bottom, BorderLayout.SOUTH);
     add(root);
@@ -55,6 +57,7 @@ public final class LoginDialog extends JDialog {
           }
           Arrays.fill(repeated, '\0');
           String username = login.getText(), display = name.getText();
+          boolean rememberLogin = remember.isSelected();
           working = true;
           submit.setEnabled(false);
           cancel.setEnabled(false);
@@ -62,14 +65,15 @@ public final class LoginDialog extends JDialog {
           name.setEnabled(false);
           password.setEnabled(false);
           confirm.setEnabled(false);
+          remember.setEnabled(false);
           error.setText("Проверка...");
-          new SwingWorker<Void, Void>() {
+          new SwingWorker<Boolean, Void>() {
             @Override
-            protected Void doInBackground() {
+            protected Boolean doInBackground() {
               try {
                 if (setup) auth.bootstrap(username, display, secret);
                 else auth.login(username, secret);
-                return null;
+                return !rememberLogin || auth.rememberLogin();
               } finally {
                 Arrays.fill(secret, '\0');
               }
@@ -84,10 +88,13 @@ public final class LoginDialog extends JDialog {
               name.setEnabled(true);
               password.setEnabled(true);
               confirm.setEnabled(true);
+              remember.setEnabled(true);
               password.setText("");
               confirm.setText("");
               try {
-                get();
+                if (!get()) JOptionPane.showMessageDialog(LoginDialog.this,
+                    "Вход выполнен. Сохранить вход на этом устройстве не удалось.",
+                    "Сохранение входа", JOptionPane.WARNING_MESSAGE);
                 dispose();
                 success.run();
               } catch (InterruptedException ex) {

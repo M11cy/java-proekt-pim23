@@ -54,6 +54,7 @@ public final class App {
       var tickets = new TicketService(database, access);
       var backups = new BackupService(database, access, session);
       boolean setup = !auth.hasUsers();
+      boolean resumed = !setup && auth.resumeLogin();
       SwingUtilities.invokeLater(
           () -> {
             try {
@@ -63,30 +64,19 @@ public final class App {
             UIManager.put("OptionPane.yesButtonText", "Да");
             UIManager.put("OptionPane.noButtonText", "Нет");
             UIManager.put("OptionPane.cancelButtonText", "Отмена");
-            var open =
-                new java.util.function.Consumer<Boolean>() {
-                  @Override
-                  public void accept(Boolean first) {
-                    var dialog =
-                        new LoginDialog(
-                            auth,
-                            first,
-                            () ->
-                                new MainFrame(
-                                        service,
-                                        database.path(),
-                                        auth,
-                                        access,
-                                        organization,
-                                        ranking,
-                                        backups,
-                                        tickets,
-                                        () -> accept(false))
-                                    .setVisible(true));
-                    dialog.setVisible(true);
-                  }
-                };
-            open.accept(setup);
+            class Screens {
+              void showMain() {
+                new MainFrame(service, database.path(), auth, access, organization, ranking, backups,
+                    tickets, () -> showLogin(false)).setVisible(true);
+              }
+
+              void showLogin(boolean first) {
+                new LoginDialog(auth, first, this::showMain).setVisible(true);
+              }
+            }
+            var screens = new Screens();
+            if (resumed) screens.showMain();
+            else screens.showLogin(setup);
           });
     } catch (Exception e) {
       System.err.println(e.getMessage());

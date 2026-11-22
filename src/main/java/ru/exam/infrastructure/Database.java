@@ -17,7 +17,8 @@ public final class Database {
           "V1__catalog.sql",
           "V2__organization_ranking.sql",
           "V3__question_rankings.sql",
-          "V4__tickets.sql");
+          "V4__tickets.sql",
+          "V5__remembered_login.sql");
 
   @FunctionalInterface
   public interface Work<T> {
@@ -228,6 +229,7 @@ public final class Database {
               Map.entry(
                   "users",
                   "id,login,name,role,active,password_hash,password_version,failed_attempts,locked_until"),
+              Map.entry("remembered_login", "id,user_id,password_version,token_hash,expires_at"),
               Map.entry("subjects", "id,code,name"),
               Map.entry("topics", "id,subject_id,code,name"),
               Map.entry("questions", "id,topic_id,current_revision,archived,reviewed_at"),
@@ -263,6 +265,7 @@ public final class Database {
                   "ranking_observations",
                   "id,event_key,question_id,revision,occurred_on,uses,attempts,ratio_sum,source,synthetic"));
       for (var table : columns.entrySet()) {
+        if (backupVersion < 5 && table.getKey().equals("remembered_login")) continue;
         if (backupVersion < 4
             && List.of("ticket_sets", "ticket_slots", "ticket_bank_snapshot")
                 .contains(table.getKey())) continue;

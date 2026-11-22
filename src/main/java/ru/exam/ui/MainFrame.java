@@ -153,7 +153,7 @@ public final class MainFrame extends JFrame {
         SwingSupport.row(
             SwingSupport.label(user.name() + " (" + user.login() + ", " + user.role() + ")"),
             action("Сменить пароль", this::changePassword),
-            action("Выйти", this::logout)),
+            action("Выйти из аккаунта", this::logout)),
         BorderLayout.NORTH);
     var footer = new JPanel(new GridLayout(2, 1, 0, 4));
     footer.add(status);
@@ -173,7 +173,7 @@ public final class MainFrame extends JFrame {
             controller.execute(
                 "Завершение сеанса...",
                 () -> {
-                  auth.logout();
+                  auth.closeSession();
                   return true;
                 },
                 ignored -> dispose());
