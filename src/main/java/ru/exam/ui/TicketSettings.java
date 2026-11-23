@@ -12,6 +12,9 @@ import javax.swing.table.DefaultTableModel;
 import ru.exam.domain.*;
 
 final class TicketSettings {
+  private static final int SEARCH_BUDGET = 25_000;
+  private static final List<Double> QUALITY_WEIGHTS = List.of(40.0, 25.0, 15.0, 15.0, 5.0);
+
   private final JTextField name = new JTextField("Экзаменационные билеты", 24);
   private final JSpinner count = new JSpinner(new SpinnerNumberModel(5, 1, 100, 1));
   private final JSpinner size = new JSpinner(new SpinnerNumberModel(3, 1, 10, 1));
@@ -19,14 +22,11 @@ final class TicketSettings {
   private final JTextField target = new JTextField("3");
   private final JCheckBox hard = new JCheckBox("Ограничить отклонение");
   private final JTextField tolerance = new JTextField("0,5");
-  private final JTextField seed =
-      new JTextField(Long.toString(ThreadLocalRandom.current().nextLong()));
-  private final JTextField budget = new JTextField("25000");
-  private final JTextField weights = new JTextField("40 25 15 15 5");
+  private final long seed = ThreadLocalRandom.current().nextLong();
   private final JComboBox<String> topicMode =
       new JComboBox<>(new String[] {"Без квот по темам", "Квоты на билет", "Квоты на комплект"});
   private final JCheckBox exactTypes = new JCheckBox("Точные квоты типов на билет");
-  private final JPanel slots = new JPanel(new GridLayout(0, 5, 5, 5));
+  private final JPanel slots = new JPanel(new GridBagLayout());
   private final List<Position> positions = new ArrayList<>();
   private final List<Item> bank;
   private final List<Topic> topics;
@@ -81,14 +81,10 @@ final class TicketSettings {
             "Средняя сложность билета",
             hard,
             "Допуск",
-            tolerance,
-            "Начальное число поиска (seed)",
-            seed,
-            "Лимит поиска",
-            budget,
-            "Веса: разброс, цель, повторы, темы, рейтинг",
-            weights));
-    tabs.addTab("Позиции", new JScrollPane(slots));
+            tolerance));
+    var positionContent = new JPanel(new BorderLayout());
+    positionContent.add(slots, BorderLayout.NORTH);
+    tabs.addTab("Позиции", new JScrollPane(positionContent));
     var quota = new JPanel(new GridLayout(2, 1, 5, 5));
     quota.add(quotaPanel(topicMode, topicTable));
     quota.add(quotaPanel(exactTypes, typeTable));
@@ -144,27 +140,22 @@ final class TicketSettings {
             || !allowedTopics.contains(q.topicId())
             || !allowedTypes.contains(q.type())) excluded.add(q.id());
       }
-      var values =
-          Arrays.stream(weights.getText().strip().split("\\s+"))
-              .map(TicketSettings::decimal)
-              .toList();
       return new Config(
           (Integer) count.getValue(),
           rules,
           (Integer) repeat.getValue(),
           decimal(target.getText()),
           hard.isSelected() ? decimal(tolerance.getText()) : null,
-          Long.parseLong(seed.getText().strip()),
-          Integer.parseInt(budget.getText().strip()),
+          seed,
+          SEARCH_BUDGET,
           required,
           excluded,
           topicQuotas,
           topicMode.getSelectedIndex() == 2,
           typeQuotas,
-          values);
+          QUALITY_WEIGHTS);
     } catch (java.text.ParseException | NumberFormatException e) {
-      throw new ValidationException(
-          "Проверьте числовые параметры. Пять весов вводятся через пробел.");
+      throw new ValidationException("Проверьте числовые параметры.");
     }
   }
 
@@ -176,18 +167,31 @@ final class TicketSettings {
     int length = (Integer) size.getValue();
     while (positions.size() < length) positions.add(new Position(topics));
     slots.removeAll();
-    for (String name : List.of("Позиция", "Тема", "Тип", "От сложности", "До сложности"))
-      slots.add(SwingSupport.label(name));
+    addPositionRow(
+        0,
+        SwingSupport.label("Позиция"),
+        SwingSupport.label("Тема"),
+        SwingSupport.label("Тип"),
+        SwingSupport.label("Сложность от"),
+        SwingSupport.label("Сложность до"));
     for (int i = 0; i < length; i++) {
       var p = positions.get(i);
-      slots.add(SwingSupport.label(Integer.toString(i + 1)));
-      slots.add(p.topic);
-      slots.add(p.type);
-      slots.add(p.min);
-      slots.add(p.max);
+      addPositionRow(i + 1, SwingSupport.label(Integer.toString(i + 1)), p.topic, p.type, p.min, p.max);
     }
     slots.revalidate();
     slots.repaint();
+  }
+
+  private void addPositionRow(int row, JComponent... cells) {
+    var layout = new GridBagConstraints();
+    layout.gridy = row;
+    layout.fill = GridBagConstraints.HORIZONTAL;
+    layout.insets = new Insets(4, 6, 4, 6);
+    for (int col = 0; col < cells.length; col++) {
+      layout.gridx = col;
+      layout.weightx = col == 1 ? 1 : 0;
+      slots.add(cells[col], layout);
+    }
   }
 
   private static JPanel quotaPanel(Component option, JTable table) {
@@ -228,6 +232,14 @@ final class TicketSettings {
       for (var value : QuestionType.values()) type.addItem(value);
       max.setSelectedItem(5);
       topic.setRenderer(SwingSupport.literalListRenderer());
+      topic.setPrototypeDisplayValue("Название темы");
+      topic.addActionListener(e -> {
+        if (topic.getSelectedItem() instanceof Topic selected) {
+          topic.setToolTipText("Тема " + selected.name());
+        } else {
+          topic.setToolTipText(null);
+        }
+      });
     }
 
     Slot read() {

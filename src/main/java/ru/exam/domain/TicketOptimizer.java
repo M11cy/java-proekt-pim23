@@ -132,7 +132,7 @@ public final class TicketOptimizer {
     }
     if (best == null)
       throw new ValidationException(
-          "Исчерпан лимит поиска. Увеличьте лимит, измените seed или ослабьте ограничения.");
+          "Поиск завершился без подходящего комплекта. Попробуйте создать его снова или измените условия.");
     return new Selection(initial, improve(best));
   }
 

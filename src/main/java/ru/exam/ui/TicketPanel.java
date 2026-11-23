@@ -234,8 +234,6 @@ final class TicketPanel extends JPanel {
             + " ("
             + (draft ? "черновик" : "утверждён")
             + ")"
-            + " | Seed "
-            + set.config().seed()
             + "\nИсходный вариант  "
             + summary(before)
             + "\nТекущий вариант  "
