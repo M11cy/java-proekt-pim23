@@ -32,7 +32,7 @@ public final class LoginDialog extends JDialog {
       fields.add(SwingSupport.label("ФИО"));
       fields.add(name);
     }
-    fields.add(SwingSupport.label(setup ? "Пароль (12..256 символов)" : "Пароль"));
+    fields.add(SwingSupport.label(setup ? "Пароль (4..256 символов)" : "Пароль"));
     fields.add(password);
     if (setup) {
       fields.add(SwingSupport.label("Повтор пароля"));

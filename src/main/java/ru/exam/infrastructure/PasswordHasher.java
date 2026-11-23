@@ -8,11 +8,14 @@ import ru.exam.domain.ValidationException;
 
 public final class PasswordHasher {
   private static final int ITERATIONS = 600_000;
+  private static final int MIN_LENGTH = 4;
+  private static final int MAX_LENGTH = 256;
   private final SecureRandom random = new SecureRandom();
 
   public String hash(char[] password) {
-    if (password == null || password.length < 12 || password.length > 256)
-      throw new ValidationException("Пароль: от 12 до 256 символов.");
+    int length = password == null ? 0 : Character.codePointCount(password, 0, password.length);
+    if (length < MIN_LENGTH || length > MAX_LENGTH)
+      throw new ValidationException("Пароль: от " + MIN_LENGTH + " до " + MAX_LENGTH + " символов.");
     byte[] salt = new byte[16];
     random.nextBytes(salt);
     return "pbkdf2-sha256$"
@@ -24,7 +27,7 @@ public final class PasswordHasher {
   }
 
   public boolean verify(char[] password, String encoded) {
-    if (password == null || password.length > 256) return false;
+    if (password == null || Character.codePointCount(password, 0, password.length) > MAX_LENGTH) return false;
     try {
       String[] parts = encoded.split("[$]");
       if (parts.length != 4 || !parts[0].equals("pbkdf2-sha256")) return false;

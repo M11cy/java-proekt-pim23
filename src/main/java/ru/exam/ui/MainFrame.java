@@ -812,7 +812,7 @@ public final class MainFrame extends JFrame {
     var confirm = new JPasswordField(24);
     var form =
         SwingSupport.form(
-            "Текущий пароль", old, "Новый пароль (12..256)", next, "Повтор нового пароля", confirm);
+            "Текущий пароль", old, "Новый пароль (4..256)", next, "Повтор нового пароля", confirm);
     SwingSupport.edit(
         this,
         "Смена пароля",

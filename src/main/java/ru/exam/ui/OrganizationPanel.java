@@ -165,7 +165,7 @@ final class OrganizationPanel extends JPanel {
             role,
             "Состояние",
             active,
-            value == null ? "Пароль (12..256)" : "Новый пароль (пусто: сохранить)",
+            value == null ? "Пароль (4..256)" : "Новый пароль (пусто: сохранить)",
             password);
     SwingSupport.edit(
         this,
